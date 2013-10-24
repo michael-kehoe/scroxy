@@ -7,6 +7,7 @@ from pysnmp import debug
 import sys
 import redis
 from ConfigParser import SafeConfigParser
+from pprint import pprint
 
 # community-name -> target-name, target-address
 agentMap = {}
@@ -54,6 +55,7 @@ config.addSocketTransport(
 
 securityMappings = []
 
+#Create backends
 for coms in systems.values():
   config.addV1System(snmpEngine, coms['scroxy_community'], coms['scroxy_community'], contextName=coms['scroxy_community'])
   print "config.addV1System():" + coms['id'] + ' with context:' + coms['scroxy_community']
@@ -80,11 +82,13 @@ for coms in systems.values():
       bename = 'backend-area-v3-' + coms['authUser']
       securityname = coms['version'] + '-' + coms['authUser'] + '-auth'  
 
+#Add systems
 for coms in systems.values():
   securityname = 'beaa-' + coms['version'] + '-' + coms['device_community']
   config.addTargetAddr(snmpEngine, coms['id'] ,udp.domainName + (2,), (coms['address'], coms['port']), securityname, retryCount=0)
   print 'config.addTargetAddr() id=' + coms['id'] + ' IP=' + coms['address'] + ' SN=' + securityname  
 
+#Create redis client
 r = redis.StrictRedis(host='perez.micko.dyndns.org', port=6379, db=0)
 
 # Default SNMP context
@@ -104,17 +108,24 @@ class CommandResponder(cmdrsp.CommandResponderBase):
                             PDU, acInfo):
         cbCtx = snmpEngine, stateReference
         varBinds = v2c.apiPDU.getVarBinds(PDU)
-        #print PDU
-        #print pduTypes
-        #print varBinds
-        #r.get('1.3.6.1.2.1.1.1.0') 
+       
         try:
-            if contextName not in agentMap:
-                raise PySnmpError('Unknown context name %s' % contextName)
-            # Select backend Agent ID by contextName arrived with request
-            targetName, targetAddress = agentMap[contextName]
-            #print('Sending request to target %s selected by contextName=%s' % (targetName, contextName))
-            if PDU.tagSet == v2c.GetBulkRequestPDU.tagSet:
+          if contextName not in agentMap:
+            raise PySnmpError('Unknown context name %s' % contextName)
+
+          # Select backend Agent ID by contextName arrived with request
+          targetName, targetAddress = agentMap[contextName]
+        
+          indice = 0
+          for oid in varBinds:
+            k,v = oid
+            key = targetAddress + "-" + str(oid[0])
+            if r.exists(key) == True:
+              v = r.get(key)
+              varBinds[indice] = (k,v)
+              self.sendRsp(snmpEngine, stateReference,  0, 0, varBinds)
+            else:
+              if PDU.tagSet == v2c.GetBulkRequestPDU.tagSet:
                 self.cmdGenMap[PDU.tagSet].sendReq(
                     snmpEngine, targetName,
                     v2c.apiBulkPDU.getNonRepeaters(PDU),
@@ -122,17 +133,16 @@ class CommandResponder(cmdrsp.CommandResponderBase):
                     varBinds,
                     self.handleResponse, cbCtx
                 )
-            elif PDU.tagSet in self.cmdGenMap:
+              elif PDU.tagSet in self.cmdGenMap:
                 self.cmdGenMap[PDU.tagSet].sendReq(
                     snmpEngine, targetName, varBinds,
                     self.handleResponse, cbCtx
                 )
+            indice = indice + 1
         except error.PySnmpError:
-            print sys.exc_info()[1]
-            self.handleResponse(
-                stateReference,  'error', 0, 0, varBinds, cbCtx
-            )
-
+          print sys.exc_info()[1]
+          self.handleResponse(stateReference,  'error', 0, 0, varBinds, cbCtx)
+    
     # SNMP response relay
     def handleResponse(self, sendRequestHandle, errorIndication, 
                        errorStatus, errorIndex, varBinds, cbCtx):
@@ -141,13 +151,21 @@ class CommandResponder(cmdrsp.CommandResponderBase):
             errorIndex = 0
             varBinds = ()
 
-        snmpEngine, stateReference = cbCtx
-        #print varBinds.pop(0)[1]
-        self.sendRsp(
-            snmpEngine, stateReference,  errorStatus, errorIndex, varBinds
-        )
+        snmpEngine, stateReference = cbCtx 
+        hosts = snmpEngine.cache['getTargetAddr']['nameToTargetMap']
+        host = ""
+        for key in hosts.items():
+          k,v = key
+          host = v[1][0]
+        for a in varBinds:
+          key = str(host) + "-" + str(a[0])
+          r.setex(key, 120, a[1])
+        self.sendRsp(snmpEngine, stateReference,  errorStatus, errorIndex, varBinds)
 
 CommandResponder(snmpEngine, context.SnmpContext(snmpEngine))
 snmpEngine.transportDispatcher.jobStarted(1) # this job would never finish
 # Run I/O dispatcher which would receive queries and send responses
 snmpEngine.transportDispatcher.runDispatcher()
+
+
+
