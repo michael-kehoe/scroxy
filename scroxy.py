@@ -115,30 +115,41 @@ class CommandResponder(cmdrsp.CommandResponderBase):
 
           # Select backend Agent ID by contextName arrived with request
           targetName, targetAddress = agentMap[contextName]
-        
+          isCached = 1 
           indice = 0
           for oid in varBinds:
+            print "Checking cache"
             k,v = oid
             key = targetAddress + "-" + str(oid[0])
             if r.exists(key) == True:
               v = r.get(key)
               varBinds[indice] = (k,v)
-              self.sendRsp(snmpEngine, stateReference,  0, 0, varBinds)
+              indice = indice + 1
+              print "Key Cached: " + str(k)
+              #self.sendRsp(snmpEngine, stateReference,  0, 0, varBinds)
             else:
-              if PDU.tagSet == v2c.GetBulkRequestPDU.tagSet:
-                self.cmdGenMap[PDU.tagSet].sendReq(
+              isCached = 0
+              print "Not all entries cached: " + str(k)
+              #break
+            
+          if isCached == 1:
+            print "All cached - sending cached response"
+            self.sendRsp(snmpEngine, stateReference,  0, 0, varBinds)
+          elif isCached == 0:
+            print "Not all cached - sending request"
+            if PDU.tagSet == v2c.GetBulkRequestPDU.tagSet:
+              self.cmdGenMap[PDU.tagSet].sendReq(
                     snmpEngine, targetName,
                     v2c.apiBulkPDU.getNonRepeaters(PDU),
                     v2c.apiBulkPDU.getMaxRepetitions(PDU),
                     varBinds,
                     self.handleResponse, cbCtx
                 )
-              elif PDU.tagSet in self.cmdGenMap:
-                self.cmdGenMap[PDU.tagSet].sendReq(
+            elif PDU.tagSet in self.cmdGenMap:
+              self.cmdGenMap[PDU.tagSet].sendReq(
                     snmpEngine, targetName, varBinds,
                     self.handleResponse, cbCtx
                 )
-            indice = indice + 1
         except error.PySnmpError:
           print sys.exc_info()[1]
           self.handleResponse(stateReference,  'error', 0, 0, varBinds, cbCtx)
@@ -159,7 +170,9 @@ class CommandResponder(cmdrsp.CommandResponderBase):
           host = v[1][0]
         for a in varBinds:
           key = str(host) + "-" + str(a[0])
+          print "Caching Key: " + key
           r.setex(key, 120, a[1])
+        print "Sending uncached response to client"
         self.sendRsp(snmpEngine, stateReference,  errorStatus, errorIndex, varBinds)
 
 CommandResponder(snmpEngine, context.SnmpContext(snmpEngine))
