@@ -108,7 +108,8 @@ class CommandResponder(cmdrsp.CommandResponderBase):
                             PDU, acInfo):
         cbCtx = snmpEngine, stateReference
         varBinds = v2c.apiPDU.getVarBinds(PDU)
-       
+        print "Begin of handleMgmtOperation"
+ 
         try:
           if contextName not in agentMap:
             raise PySnmpError('Unknown context name %s' % contextName)
@@ -117,10 +118,11 @@ class CommandResponder(cmdrsp.CommandResponderBase):
           targetName, targetAddress = agentMap[contextName]
           isCached = 1 
           indice = 0
+          print "Beginning to check all of cache"
           for oid in varBinds:
-            print "Checking cache"
             k,v = oid
             key = targetAddress + "-" + str(oid[0])
+            print "Checking cache for oid: " + str(oid[0])
             if r.exists(key) == True:
               v = r.get(key)
               varBinds[indice] = (k,v)
